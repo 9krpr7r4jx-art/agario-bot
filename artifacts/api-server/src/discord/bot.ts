@@ -5,114 +5,15 @@ import {
   Message,
   Partials,
 } from "discord.js";
-import OpenAI from "openai";
 import { logger } from "../lib/logger";
-import { AGARIO_SYSTEM_PROMPT } from "./agario-prompt";
+import {
+  isHack,
+  isBotsReady,
+  isAgarioRelated,
+  findAnswer,
+} from "./agario-brain";
 
-// ─── OpenAI client ────────────────────────────────────────────────────────────
-
-const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
-
-// ─── Deterministic hack keyword pre-filter ────────────────────────────────────
-// These patterns catch obvious cases before/after AI classification, preventing
-// policy bypass if the model returns malformed or adversarial output.
-
-const HACK_PATTERNS = [
-  /\b(hack|hacking|hacked)\b/i,
-  /\b(cheat|cheating|cheater)\b/i,
-  /\bmod[\s-]?menu\b/i,
-  /\b(aimbot|speedhack|wallhack|noclip|no[\s-]?clip)\b/i,
-  /\b(unlimited[\s-]?dna|free[\s-]?dna[\s-]?hack|dna[\s-]?generator)\b/i,
-  /\b(cheat[\s-]?engine|memory[\s-]?edit|apk[\s-]?mod|modded[\s-]?apk)\b/i,
-  /\b(auto[\s-]?split[\s-]?bot|bot[\s-]?script|auto[\s-]?play)\b/i,
-  /\b(exploit|exploiting)\b/i,
-  /\b(bypass|spoof|tamper)\b/i,
-  /how\s+to\s+get\s+(infinite|unlimited|free)\s+dna/i,
-];
-
-function isDefinitelyHack(text: string): boolean {
-  return HACK_PATTERNS.some((p) => p.test(text));
-}
-
-// ─── Special-case patterns (bots-ready / Ashot) ───────────────────────────────
-
-const BOTS_READY_PATTERNS = [
-  /when\s+(are?\s+)?the\s+bots?\s+(going\s+to\s+be\s+)?(ready|done|finish)/i,
-  /when\s+will\s+(the\s+)?bots?\s+be\s+(ready|done|finish)/i,
-  /bots?\s+(ready|done)\s+when/i,
-  /when\s+is?\s+ashot\s+(going\s+to\s+)?(finish|done|ready|complet)/i,
-  /when\s+will\s+ashot\s+(finish|be\s+done|complet)/i,
-  /ashot.*bot.*when/i,
-  /when.*ashot.*bot/i,
-  /quand.*bots?\s+(pr[eê]t|fini|termin)/i,
-  /quand.*ashot.*(finir|termin|fini)/i,
-  /les\s+bots?\s+(sont\s+)?(pr[eê]t|fini|termin)\s+quand/i,
-];
-
-function isBotsReadyQuestion(text: string): boolean {
-  return BOTS_READY_PATTERNS.some((p) => p.test(text));
-}
-
-// ─── AI response types ────────────────────────────────────────────────────────
-
-interface AIResponse {
-  type: "answer" | "off_topic" | "hack";
-  message: string;
-}
-
-// ─── Ask OpenAI ───────────────────────────────────────────────────────────────
-
-const DISCORD_MAX_CHARS = 1900; // safe limit under Discord's 2000-char max
-
-async function askAI(question: string): Promise<AIResponse> {
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.4,
-    max_tokens: 600,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: AGARIO_SYSTEM_PROMPT },
-      { role: "user", content: question },
-    ],
-  });
-
-  const raw = completion.choices[0]?.message?.content ?? "{}";
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // Completely malformed JSON — safe error, never expose raw model text
-    logger.warn({ raw }, "OpenAI returned non-JSON — returning safe error");
-    return {
-      type: "off_topic",
-      message: "I had trouble processing that. Please try rephrasing your question! 😅",
-    };
-  }
-
-  const obj = parsed as Record<string, unknown>;
-  const validTypes = ["answer", "off_topic", "hack"] as const;
-
-  if (!validTypes.includes(obj["type"] as typeof validTypes[number])) {
-    logger.warn({ type: obj["type"] }, "OpenAI returned invalid type — defaulting to error");
-    return {
-      type: "off_topic",
-      message: "I had trouble processing that. Please try rephrasing your question! 😅",
-    };
-  }
-
-  const type = obj["type"] as AIResponse["type"];
-  const rawMessage = typeof obj["message"] === "string" ? obj["message"] : String(obj["message"] ?? "");
-
-  // Cap message length to stay within Discord limits
-  const message = rawMessage.length > DISCORD_MAX_CHARS
-    ? rawMessage.slice(0, DISCORD_MAX_CHARS) + "…"
-    : rawMessage;
-
-  return { type, message };
-}
-
-// ─── Resolve @enzothek user ID in the guild ───────────────────────────────────
+// ─── @enzothek mention resolver ───────────────────────────────────────────────
 
 const ENZOTHEK_USERNAME = "enzothek";
 const enzothekCache: { id: string | null; checkedAt: number } = {
@@ -120,11 +21,8 @@ const enzothekCache: { id: string | null; checkedAt: number } = {
   checkedAt: 0,
 };
 
-async function getEnzothekMention(
-  message: Message,
-): Promise<string> {
+async function getEnzothekMention(message: Message): Promise<string> {
   const now = Date.now();
-  // Refresh cache every 10 minutes
   if (enzothekCache.id && now - enzothekCache.checkedAt < 10 * 60 * 1000) {
     return `<@${enzothekCache.id}>`;
   }
@@ -153,97 +51,91 @@ async function getEnzothekMention(
     logger.warn({ err }, "Could not search guild members for enzothek");
   }
 
-  // Fallback: plain text mention
   return `@${ENZOTHEK_USERNAME}`;
+}
+
+// ─── Fallback answers when topic is recognised but no specific intent matched ─
+
+const AGARIO_FALLBACKS = [
+  "That's a good question! I don't have a specific answer for that one right now. Try checking the **agar.io wiki** (agario.fandom.com) or ask in the community — someone will know! 🟢",
+  "Hmm, I'm not sure about that specific detail. The **agar.io subreddit** (r/agario) and YouTube are great resources for deeper questions! 🎮",
+  "I don't have that in my knowledge base yet. Try the **agar.io wiki** or ask an experienced player in the server!",
+  "Great question, but that one's outside what I can answer right now. Check **Miniclip's official support** (miniclip.com/support) or the community wiki!",
+];
+
+function getAgarioFallback(): string {
+  return AGARIO_FALLBACKS[Math.floor(Math.random() * AGARIO_FALLBACKS.length)]!;
 }
 
 // ─── Message handler ──────────────────────────────────────────────────────────
 
+const ALLOWED_CHANNEL_ID = "1523745484232065116";
+
 async function handleMessage(message: Message, client: Client): Promise<void> {
-  // Ignore bots and DMs
   if (message.author.bot || !message.guild) return;
-
-  // Only operate in the designated channel
-  const ALLOWED_CHANNEL_ID = "1523745484232065116";
   if (message.channelId !== ALLOWED_CHANNEL_ID) return;
-
-  // Only respond when directly mentioned
   if (!message.mentions.has(client.user!)) return;
 
-  // Strip the bot mention(s) from message content
-  const cleanContent = message.content.replace(/<@!?[0-9]+>/g, "").trim();
+  // Strip the bot mention(s) to get the real question
+  const question = message.content.replace(/<@!?[0-9]+>/g, "").trim();
 
-  // Safe reply — only pings the original author, never roles or @everyone
-  const safeReply = (
-    content: string,
-    extraAllowedUsers: string[] = [],
-  ) =>
+  // Safe reply — only allows pinging the original author (+ optional extras)
+  const safeReply = (content: string, extraUsers: string[] = []) =>
     message.reply({
       content,
       allowedMentions: {
-        users: [message.author.id, ...extraAllowedUsers],
+        users: [message.author.id, ...extraUsers],
         roles: [],
         parse: [],
       },
     });
 
-  // Empty mention — show help
-  if (!cleanContent) {
+  const ping = `<@${message.author.id}>`;
+
+  // ── Empty mention ─────────────────────────────────────────────────────────
+  if (!question) {
     await safeReply(
-      `Hey <@${message.author.id}>! 🟢 Ask me anything about **Agario** or **Agario Mobile** — skins, DNA, splits, viruses, tricks, clans, strategies, and more!`,
+      `Hey ${ping}! 🟢 Ask me anything about **Agario** or **Agario Mobile** — skins, DNA, splits, viruses, tricks, clans, strategies, and more!`,
     );
     return;
   }
 
-  // Fast path: "when will bots be ready / when will Ashot finish"
-  if (isBotsReadyQuestion(cleanContent)) {
-    await safeReply(`<@${message.author.id}> Soon… get ready! 🎮`);
-    return;
-  }
-
-  // Deterministic hack pre-check — catches obvious cases before calling AI
-  // so policy cannot be bypassed even if the model misbehaves
-  if (isDefinitelyHack(cleanContent)) {
+  // ── Hack / cheat detection (deterministic, two layers) ────────────────────
+  if (isHack(question)) {
     const enzothekMention = await getEnzothekMention(message);
     const extraIds = enzothekCache.id ? [enzothekCache.id] : [];
     await safeReply(
-      `<@${message.author.id}> I can't answer this question, sorry. Ping ${enzothekMention} to know 🙅`,
+      `${ping} I can't answer this question, sorry. Ping ${enzothekMention} to know 🙅`,
       extraIds,
     );
     return;
   }
 
-  // ── Ask the AI ──────────────────────────────────────────────────────────────
-  let aiResponse: AIResponse;
-  try {
-    aiResponse = await askAI(cleanContent);
-  } catch (err) {
-    logger.error({ err }, "OpenAI request failed");
+  // ── "When will bots be ready / when will Ashot finish" ───────────────────
+  if (isBotsReady(question)) {
+    await safeReply(`${ping} Soon… get ready! 🎮`);
+    return;
+  }
+
+  // ── Off-topic detection ───────────────────────────────────────────────────
+  if (!isAgarioRelated(question)) {
     await safeReply(
-      `<@${message.author.id}> I'm having trouble thinking right now. Please try again in a moment! 😅`,
+      `${ping} Sorry, I can only help with questions about **Agario** and **Agario Mobile**! 🟢\nAsk me about skins, DNA, splits, viruses, clans, strategies, and more.`,
     );
     return;
   }
 
-  // ── Route based on response type ────────────────────────────────────────────
-  // Deterministic post-check: override AI if it missed an obvious hack question
-  if (aiResponse.type === "hack" || isDefinitelyHack(cleanContent)) {
-    const enzothekMention = await getEnzothekMention(message);
-    const extraIds = enzothekCache.id ? [enzothekCache.id] : [];
-    await safeReply(
-      `<@${message.author.id}> I can't answer this question, sorry. Ping ${enzothekMention} to know 🙅`,
-      extraIds,
-    );
-    return;
-  }
+  // ── Find the best matching answer ────────────────────────────────────────
+  const answer = findAnswer(question);
 
-  if (aiResponse.type === "off_topic") {
-    await safeReply(`<@${message.author.id}> ${aiResponse.message}`);
-    return;
+  if (answer) {
+    // Cap at 1900 chars to stay under Discord's 2000-char limit
+    const safe = answer.length > 1900 ? answer.slice(0, 1900) + "…" : answer;
+    await safeReply(`${ping}\n\n${safe}`);
+  } else {
+    // Topic recognised but no specific intent matched
+    await safeReply(`${ping} ${getAgarioFallback()}`);
   }
-
-  // Normal Agario answer — length already capped in askAI()
-  await safeReply(`<@${message.author.id}>\n\n${aiResponse.message}`);
 }
 
 // ─── Bot startup ──────────────────────────────────────────────────────────────
@@ -255,16 +147,11 @@ export function startDiscordBot(): void {
     return;
   }
 
-  if (!process.env["OPENAI_API_KEY"]) {
-    logger.warn("OPENAI_API_KEY not set — Discord bot will not start.");
-    return;
-  }
-
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.GuildMembers,   // needed to search for @enzothek
+      GatewayIntentBits.GuildMembers, // needed to resolve @enzothek
       GatewayIntentBits.MessageContent,
     ],
     partials: [Partials.Channel],
