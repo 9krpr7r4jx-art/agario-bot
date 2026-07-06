@@ -78,6 +78,10 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
   // Ignore bots and system messages
   if (message.author.bot || !message.guild) return;
 
+  // Only operate in the designated channel
+  const ALLOWED_CHANNEL_ID = "1523745484232065116";
+  if (message.channelId !== ALLOWED_CHANNEL_ID) return;
+
   const isMentioned = message.mentions.has(client.user!);
   if (!isMentioned) return;
 
