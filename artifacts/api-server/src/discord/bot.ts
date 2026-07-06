@@ -5,12 +5,11 @@ import {
   Message,
   Partials,
 } from "discord.js";
-import OpenAI from "openai";
 import { logger } from "../lib/logger";
-
-// ─── OpenAI client ────────────────────────────────────────────────────────────
-
-const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
+import {
+  isAgarioRelated,
+  findAnswer,
+} from "./agario-knowledge";
 
 // ─── Special-case patterns ────────────────────────────────────────────────────
 
@@ -31,45 +30,19 @@ function isBotsReadyQuestion(text: string): boolean {
   return BOTS_READY_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-// ─── AI helpers ───────────────────────────────────────────────────────────────
+// ─── Fallback response when we know it's Agario but have no specific answer ──
 
-async function isAgarioRelated(text: string): Promise<boolean> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    max_tokens: 10,
-    messages: [
-      {
-        role: "system",
-        content:
-          'You are a classifier. Respond ONLY with "yes" or "no". Is the user message related to the game Agario (agar.io), its mechanics, cells, DNA, skins, servers, gameplay, strategies, clans, or the Agario mobile game?',
-      },
-      { role: "user", content: text },
-    ],
-  });
-  const answer = response.choices[0]?.message?.content?.toLowerCase().trim() ?? "";
-  // Be permissive: accept "yes", "yes.", "yes!" etc.
-  return answer.startsWith("yes");
-}
+const AGARIO_FALLBACK_RESPONSES = [
+  "I don't have specific info on that, but feel free to check the **agar.io wiki** (agario.fandom.com) or ask in the community — someone might know! 🟢",
+  "That's a tricky one! Try searching on the **agar.io subreddit** (r/agario) or YouTube for a guide. 🎮",
+  "I'm not sure about the details on that one. The **agar.io wiki** or Discord community members can help! Check #general.",
+  "Hmm, I don't have that answer in my knowledge base. Try the agar.io wiki or ask an experienced player in the server!",
+];
 
-async function generateAgarioAnswer(text: string): Promise<string> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    max_tokens: 512,
-    messages: [
-      {
-        role: "system",
-        content: `You are AgarioBot, a helpful assistant for an Agario and Agario Mobile community Discord server.
-You ONLY answer questions about Agario (agar.io) and Agario Mobile — including gameplay mechanics, DNA currency, skins, servers, strategies, clans, game updates, and the community.
-Answer clearly and concisely in English. Be friendly and accurate.
-Do not answer anything unrelated to Agario.`,
-      },
-      { role: "user", content: text },
-    ],
-  });
-  return (
-    response.choices[0]?.message?.content?.trim() ??
-    "Sorry, I couldn't generate an answer. Please try again!"
-  );
+function getAgarioFallback(): string {
+  return AGARIO_FALLBACK_RESPONSES[
+    Math.floor(Math.random() * AGARIO_FALLBACK_RESPONSES.length)
+  ]!;
 }
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -90,8 +63,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
     .replace(/<@!?[0-9]+>/g, "")
     .trim();
 
-  // allowedMentions: only ping the original author — never @everyone, @here, or roles,
-  // even if the LLM output contains such strings.
+  // allowedMentions: only ping the original author — never @everyone, @here, or roles
   const safeReply = (content: string) =>
     message.reply({
       content,
@@ -101,7 +73,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
   // If no actual content after stripping the mention
   if (!cleanContent) {
     await safeReply(
-      `Hey <@${message.author.id}>! Ask me anything about **Agario** or **Agario Mobile** — gameplay, DNA, skins, servers, strategies, and more!`,
+      `Hey <@${message.author.id}>! 🟢 Ask me anything about **Agario** or **Agario Mobile** — splits, viruses, DNA, skins, tricks, strategies, and more!`,
     );
     return;
   }
@@ -112,38 +84,23 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
     return;
   }
 
-  // Classify the question
-  let agarioRelated: boolean;
-  try {
-    agarioRelated = await isAgarioRelated(cleanContent);
-  } catch (err) {
-    logger.error({ err }, "OpenAI classification error");
+  // Check if the question is Agario-related
+  if (!isAgarioRelated(cleanContent)) {
     await safeReply(
-      `<@${message.author.id}> Sorry, I'm having trouble right now. Please try again in a moment!`,
+      `<@${message.author.id}> I only answer questions about **Agario** and **Agario Mobile**! 🟢 Ask me about splits, viruses, DNA, skins, strategies, and more.`,
     );
     return;
   }
 
-  if (!agarioRelated) {
-    await safeReply(
-      `<@${message.author.id}> I only answer questions about **Agario** and **Agario Mobile**! 🟢 Ask me about gameplay, DNA, skins, servers, strategies, and more.`,
-    );
-    return;
-  }
+  // Look up the answer in the knowledge base
+  const answer = findAnswer(cleanContent);
 
-  // Generate an Agario-specific answer
-  let answer: string;
-  try {
-    answer = await generateAgarioAnswer(cleanContent);
-  } catch (err) {
-    logger.error({ err }, "OpenAI answer generation error");
-    await safeReply(
-      `<@${message.author.id}> Sorry, I couldn't generate an answer right now. Please try again!`,
-    );
-    return;
+  if (answer) {
+    await safeReply(`<@${message.author.id}>\n\n${answer}`);
+  } else {
+    // It's Agario-related but we don't have a specific answer
+    await safeReply(`<@${message.author.id}> ${getAgarioFallback()}`);
   }
-
-  await safeReply(`<@${message.author.id}> ${answer}`);
 }
 
 // ─── Bot startup ──────────────────────────────────────────────────────────────
@@ -155,17 +112,11 @@ export function startDiscordBot(): void {
     return;
   }
 
-  if (!process.env["OPENAI_API_KEY"]) {
-    logger.warn("OPENAI_API_KEY not set — Discord bot will not start.");
-    return;
-  }
-
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
-      GatewayIntentBits.DirectMessages,
     ],
     partials: [Partials.Channel],
   });
