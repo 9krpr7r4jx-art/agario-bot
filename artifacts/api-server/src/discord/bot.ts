@@ -5,43 +5,60 @@ import {
   Message,
   Partials,
 } from "discord.js";
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { logger } from "../lib/logger";
 import { isHack, isBotsReady } from "./agario-brain";
 
-// ─── Gemini client (lazy-init so missing key is caught gracefully) ────────────
+// ─── Groq client (OpenAI-compatible, lazy init) ───────────────────────────────
 
-let _ai: GoogleGenAI | null = null;
+let _groq: OpenAI | null = null;
 
-function getAI(): GoogleGenAI {
-  if (!_ai) {
-    const key = process.env["GEMINI_API_KEY"];
-    if (!key) throw new Error("GEMINI_API_KEY is not set");
-    _ai = new GoogleGenAI({ apiKey: key });
+function getGroq(): OpenAI {
+  if (!_groq) {
+    const key = process.env["GROQ_API_KEY"];
+    if (!key) throw new Error("GROQ_API_KEY is not set");
+    _groq = new OpenAI({
+      apiKey: key,
+      baseURL: "https://api.groq.com/openai/v1",
+    });
   }
-  return _ai;
+  return _groq;
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are a friendly, knowledgeable Discord bot assistant. You can answer questions about ANYTHING: life, science, history, math, languages, music, sports, games (including Agario), culture, coding, food, travel, relationships, movies, animals — everything.
+const SYSTEM_PROMPT = `You are a smart, friendly, and knowledgeable Discord bot. You can answer questions about EVERYTHING — there are no forbidden topics except hacking/cheating (see below). This includes:
 
-You have DEEP expertise in Agario and Agario Mobile (2015–2026): custom skins, DNA currency, split mechanics, trick splits, cannons, split feeds, viruses, teams, clans, clan wars, Battle Royale, events, battle pass, mystery boxes, daily missions, leveling, controls, strategies, glitches, server regions, and more.
+- 🎮 All video games (Agario, Minecraft, Fortnite, Roblox, GTA, FIFA, etc.)
+- 🌍 Life, culture, travel, relationships, philosophy
+- 🔬 Science, biology, physics, chemistry, astronomy
+- 📚 History, geography, literature, languages
+- 🎵 Music, movies, TV shows, celebrities, pop culture
+- 💻 Coding, technology, AI, internet
+- 🧮 Math, logic, riddles
+- 🐾 Animals, nature, food, sport
+- 💬 Any language — always respond in the SAME LANGUAGE as the user's question
+
+AGARIO EXPERTISE — you have deep knowledge of Agario & Agario Mobile (2015–2026):
+• Custom skins: Profile → Edit Cell → Custom Skin (draw or import image, 512×512 PNG)
+• DNA: free currency from ads (20–50 DNA/ad), daily missions, login streak, events
+• Splits: trick split (feed+split simultaneously for extra range), multi-split (up to 16 cells), merge timer (~30–90s)
+• Split feed & Cannon: teammates feed one player → massive split at enemies
+• Viruses: touch if >133 mass = explode into 16 pieces; shoot by feeding a virus 7 times
+• Teams, FFA, Battle Royale (shrinking map, Mobile exclusive), Party Mode (private rooms)
+• Clans: create with tag [TAG], clan wars, roles (Leader/Officer/Member/Recruit)
+• Events: seasonal (Halloween, Christmas, Summer), limited skins — prioritize them, they rarely return!
+• Battle Pass, Mystery Boxes (Basic/Silver/Gold/Diamond), Daily Missions, XP/Level system
+• Boost (Mobile only): speed burst, use to escape or catch enemies
+• Lag fix: use WiFi, close apps, change server region, lower graphics
+• Ashot: key community member who creates bots and server features
 
 RULES:
-- Always respond in **English**
-- Use Discord markdown: **bold**, bullet points (•), numbered lists, and relevant emojis
-- Keep answers clear and helpful — not too long, not too short
-- Be friendly and enthusiastic
-- If you don't know something specific, be honest and suggest where to look
-- NEVER discuss how to hack, cheat, or exploit any game or system — redirect those questions
-- For Agario Mobile specifically: "Ashot" is a well-known member of the community server who creates bots and manages server features
-
-FORMAT RULES for Discord:
-- Max ~1800 characters per response (Discord limit)
-- Use **bold** for key terms and section titles
-- Use numbered lists for steps, bullet points for options
-- Add 1–2 relevant emojis per section to make it visually clear`;
+1. LANGUAGE: Always reply in the exact same language the user writes in. If they write in French → answer in French. Spanish → Spanish. Arabic → Arabic. English → English. Never switch languages unless asked.
+2. HACKS: Never explain how to hack, cheat, exploit, or get unlimited resources in any game. Just say you can't help with that.
+3. FORMAT: Use Discord markdown — **bold** for key terms, • bullet points, numbered steps. Add relevant emojis. Keep answers under ~1700 characters.
+4. TONE: Be friendly, direct, and enthusiastic. Like a knowledgeable friend.
+5. HONESTY: If unsure about something, say so and suggest where to look.`;
 
 // ─── @enzothek mention resolver ───────────────────────────────────────────────
 
@@ -80,22 +97,22 @@ async function getEnzothekMention(message: Message): Promise<string> {
   return `@${ENZOTHEK_USERNAME}`;
 }
 
-// ─── Ask Gemini ───────────────────────────────────────────────────────────────
+// ─── Ask Groq ─────────────────────────────────────────────────────────────────
 
-async function askGemini(question: string): Promise<string> {
-  const response = await getAI().models.generateContent({
-    model: "gemini-2.0-flash",
-    contents: [{ role: "user", parts: [{ text: question }] }],
-    config: {
-      systemInstruction: SYSTEM_PROMPT,
-      maxOutputTokens: 800,
-      temperature: 0.7,
-    },
+async function askGroq(question: string): Promise<string> {
+  const completion = await getGroq().chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    max_tokens: 700,
+    temperature: 0.7,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: question },
+    ],
   });
 
-  const text = (response.text ?? "").trim();
-  if (!text) return "I'm not sure how to answer that — could you rephrase? 🤔";
-  // Cap at 1850 chars to stay safely under Discord's 2000-char limit
+  const text = (completion.choices[0]?.message?.content ?? "").trim();
+  if (!text) return "Je n'ai pas pu générer une réponse, réessaie ! 🤔";
+  // Cap at 1850 chars to stay under Discord's 2000-char limit
   return text.length > 1850 ? text.slice(0, 1850) + "…" : text;
 }
 
@@ -108,7 +125,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
   if (message.channelId !== ALLOWED_CHANNEL_ID) return;
   if (!message.mentions.has(client.user!)) return;
 
-  // Strip bot mention(s) to get the real question
+  // Strip bot mention(s) to get the actual question
   const question = message.content.replace(/<@!?[0-9]+>/g, "").trim();
 
   // Safe reply — only pings the author (+ optional extra users)
@@ -127,12 +144,12 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
   // ── Empty mention ────────────────────────────────────────────────────────
   if (!question) {
     await safeReply(
-      `Hey ${ping}! 🤖 Ask me **anything** — Agario tips, life questions, games, science, history, coding, and more. I know it all!`,
+      `Hey ${ping}! 🤖 Ask me **anything** — games, life, science, history, math, music, coding, and more. I understand all languages!`,
     );
     return;
   }
 
-  // ── Hack / cheat detection (deterministic — never reaches AI) ────────────
+  // ── Hack / cheat (deterministic, never reaches AI) ───────────────────────
   if (isHack(question)) {
     const enzothekMention = await getEnzothekMention(message);
     const extraIds = enzothekCache.id ? [enzothekCache.id] : [];
@@ -143,21 +160,30 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
     return;
   }
 
-  // ── "When will bots be ready / when will Ashot finish" ──────────────────
+  // ── Bots-ready / Ashot ───────────────────────────────────────────────────
   if (isBotsReady(question)) {
     await safeReply(`${ping} Soon… get ready! 🎮`);
     return;
   }
 
-  // ── Ask Gemini — answers everything ─────────────────────────────────────
+  // ── Ask Groq — answers everything in any language ────────────────────────
   try {
-    const answer = await askGemini(question);
+    const answer = await askGroq(question);
     await safeReply(`${ping}\n\n${answer}`);
-  } catch (err) {
-    logger.error({ err }, "Gemini request failed");
-    await safeReply(
-      `${ping} I'm having a brain moment 😅 Try again in a second!`,
-    );
+  } catch (err: unknown) {
+    logger.error({ err }, "Groq request failed");
+
+    // Surface a friendlier message for rate-limit errors
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("429") || msg.includes("rate_limit")) {
+      await safeReply(
+        `${ping} Je reçois trop de questions en ce moment ⏳ Réessaie dans quelques secondes !`,
+      );
+    } else {
+      await safeReply(
+        `${ping} Quelque chose s'est mal passé 😅 Réessaie !`,
+      );
+    }
   }
 }
 
@@ -169,8 +195,8 @@ export function startDiscordBot(): void {
     logger.warn("DISCORD_TOKEN not set — Discord bot will not start.");
     return;
   }
-  if (!process.env["GEMINI_API_KEY"]) {
-    logger.warn("GEMINI_API_KEY not set — Discord bot will not start.");
+  if (!process.env["GROQ_API_KEY"]) {
+    logger.warn("GROQ_API_KEY not set — Discord bot will not start.");
     return;
   }
 
