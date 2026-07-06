@@ -127,7 +127,8 @@ const SYNONYMS: Record<string, string[]> = {
   // Lag
   lag: ["latency", "delay", "ping", "fps drop", "freeze", "stutter", "slow", "choppy", "connection issue", "disconnect"],
   // Hack (dangerous — used in hack detection too)
-  hack: ["cheat", "mod", "exploit", "glitch abuse", "aimbot", "script", "bot script", "modded apk"],
+  // NOTE: "mod" is intentionally NOT here — mods are legitimate and should be answered
+  hack: ["cheat", "exploit", "glitch abuse", "aimbot", "bot script", "modded apk"],
 };
 
 export function normalise(text: string): string {
@@ -173,17 +174,16 @@ export function processText(raw: string): string {
 // ─── Hack detection ────────────────────────────────────────────────────────────
 
 const HACK_PATTERNS = [
-  /\b(hack|hacking|hacked)\b/i,
-  /\bcheat(ing|er|s)?\b/i,
+  // Explicit Agario cheating tools
   /\bmod[\s-]?menu\b/i,
-  /\b(aimbot|speedhack|wallhack|noclip|no[\s-]?clip)\b/i,
+  /\b(aimbot|speedhack|wallhack)\b/i,
   /\b(unlimited[\s-]?dna|free[\s-]?dna[\s-]?hack|dna[\s-]?generator|dna[\s-]?cheat)\b/i,
-  /\b(cheat[\s-]?engine|memory[\s-]?edit|apk[\s-]?mod|modded[\s-]?apk)\b/i,
-  /\b(auto[\s-]?split[\s-]?bot|bot[\s-]?script)\b/i,
-  /\b(exploit|exploiting)\b/i,
-  /\b(bypass|spoof|tamper)\b/i,
+  /\b(cheat[\s-]?engine|memory[\s-]?edit(or|ing)?)\b/i,
+  /\b(apk[\s-]?mod|modded[\s-]?apk|apk[\s-]?hack)\b/i,
+  /\b(auto[\s-]?split[\s-]?bot|bot[\s-]?script|auto[\s-]?play[\s-]?bot)\b/i,
+  /\b(injector|trainer)\b/i,
   /how\s+to\s+get\s+(infinite|unlimited)\s+dna/i,
-  /\b(generator|injector|trainer)\b/i,
+  /\b(hack|hacking|hacked)\s+(agario|agar|the\s+game|dna|server)\b/i,
 ];
 
 export function isHack(rawText: string): boolean {
