@@ -98,23 +98,77 @@ async function getEnzothekMention(message: Message): Promise<string> {
   return `@${ENZOTHEK_USERNAME}`;
 }
 
+// ─── Conversation history (per-user, in-memory) ───────────────────────────────
+
+interface Turn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface UserHistory {
+  turns: Turn[];
+  lastActivity: number;
+}
+
+const MAX_TURNS = 10;           // keep last 10 user+assistant pairs
+const HISTORY_TTL_MS = 30 * 60 * 1000; // clear after 30 min of inactivity
+
+const conversationHistory = new Map<string, UserHistory>();
+
+function getHistory(userId: string): UserHistory {
+  const now = Date.now();
+  let hist = conversationHistory.get(userId);
+  // Expire stale sessions
+  if (hist && now - hist.lastActivity > HISTORY_TTL_MS) {
+    conversationHistory.delete(userId);
+    hist = undefined;
+  }
+  if (!hist) {
+    hist = { turns: [], lastActivity: now };
+    conversationHistory.set(userId, hist);
+  }
+  return hist;
+}
+
+function addTurn(userId: string, role: "user" | "assistant", content: string): void {
+  const hist = getHistory(userId);
+  hist.turns.push({ role, content });
+  // Trim to MAX_TURNS pairs (each pair = 2 entries)
+  if (hist.turns.length > MAX_TURNS * 2) {
+    hist.turns.splice(0, hist.turns.length - MAX_TURNS * 2);
+  }
+  hist.lastActivity = Date.now();
+}
+
 // ─── Ask Groq ─────────────────────────────────────────────────────────────────
 
-async function askGroq(question: string): Promise<string> {
+async function askGroq(userId: string, question: string): Promise<string> {
+  // Record the new user message before calling the API
+  addTurn(userId, "user", question);
+
+  const hist = getHistory(userId);
+
   const completion = await getGroq().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_tokens: 700,
     temperature: 0.7,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: question },
+      // Full conversation history gives context for follow-up questions
+      ...hist.turns.map((t) => ({ role: t.role, content: t.content })),
     ],
   });
 
   const text = (completion.choices[0]?.message?.content ?? "").trim();
-  if (!text) return "Je n'ai pas pu générer une réponse, réessaie ! 🤔";
+  const reply = text || "Je n'ai pas pu générer une réponse, réessaie ! 🤔";
+
   // Cap at 1850 chars to stay under Discord's 2000-char limit
-  return text.length > 1850 ? text.slice(0, 1850) + "…" : text;
+  const finalReply = reply.length > 1850 ? reply.slice(0, 1850) + "…" : reply;
+
+  // Record the assistant reply so future turns have context
+  addTurn(userId, "assistant", finalReply);
+
+  return finalReply;
 }
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -169,7 +223,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 
   // ── Ask Groq — answers everything in any language ────────────────────────
   try {
-    const answer = await askGroq(question);
+    const answer = await askGroq(message.author.id, question);
     await safeReply(`${ping}\n\n${answer}`);
   } catch (err: unknown) {
     logger.error({ err }, "Groq request failed");
