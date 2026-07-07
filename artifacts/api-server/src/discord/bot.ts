@@ -245,6 +245,14 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 // ─── Bot startup ──────────────────────────────────────────────────────────────
 
 export function startDiscordBot(): void {
+  // When deployed on Railway (or any production host), BOT_ENABLED must be
+  // explicitly set to "true". This prevents the dev server on Replit from
+  // running a second instance at the same time as the production bot.
+  if (process.env["BOT_ENABLED"] !== "true") {
+    logger.info("BOT_ENABLED != true — Discord bot disabled on this instance (set BOT_ENABLED=true in production).");
+    return;
+  }
+
   const token = process.env["DISCORD_TOKEN"];
   if (!token) {
     logger.warn("DISCORD_TOKEN not set — Discord bot will not start.");
