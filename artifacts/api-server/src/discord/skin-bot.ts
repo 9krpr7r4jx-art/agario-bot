@@ -112,13 +112,12 @@ async function handleCustomSkin(i: ChatInputCommandInteraction): Promise<void> {
   if (!botEnabled) {
     await i.reply({
       content: "Agar.io custom skin not active yet please wait until activation",
-      ephemeral: true,
     });
     return;
   }
 
   // Defer so we have time to download + validate
-  await i.deferReply({ ephemeral: true });
+  await i.deferReply();
 
   const uid        = i.options.getString("uid", true).trim();
   const attachment = i.options.getAttachment("skin", true);
@@ -159,13 +158,12 @@ async function handleCustomSkin(i: ChatInputCommandInteraction): Promise<void> {
 
 async function handleBotOn(i: ChatInputCommandInteraction): Promise<void> {
   if (!isOwner(i.user.id)) {
-    await i.reply({ content: "❌ Owner only.", ephemeral: true });
+    await i.reply({ content: "❌ Owner only." });
     return;
   }
   botEnabled = true;
   await i.reply({
     content: "✅ **Custom Skin bot is now ON.** Players can submit skins.",
-    ephemeral: true,
   });
 }
 
@@ -173,13 +171,12 @@ async function handleBotOn(i: ChatInputCommandInteraction): Promise<void> {
 
 async function handleBotOff(i: ChatInputCommandInteraction): Promise<void> {
   if (!isOwner(i.user.id)) {
-    await i.reply({ content: "❌ Owner only.", ephemeral: true });
+    await i.reply({ content: "❌ Owner only." });
     return;
   }
   botEnabled = false;
   await i.reply({
     content: "🔴 **Custom Skin bot is now OFF.** Users will be told to wait.",
-    ephemeral: true,
   });
 }
 
@@ -251,7 +248,7 @@ export async function startSkinBot(): Promise<void> {
     } catch (err) {
       logger.error({ err }, "Skin bot: unhandled interaction error");
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "❌ Something went wrong. Try again!", ephemeral: true });
+        await interaction.reply({ content: "❌ Something went wrong. Try again!" });
       }
     }
   });

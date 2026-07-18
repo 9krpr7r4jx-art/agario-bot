@@ -146,7 +146,6 @@ async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
   if (!botEnabled) {
     await i.reply({
       content: "🔴 Bot is not activated yet, please wait — Ashot will activate it.",
-      ephemeral: true,
     });
     return;
   }
@@ -156,7 +155,6 @@ async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
     await i.reply({
       content:
         "⚠️ You already have an active session!\nUse `/stopsession` to stop it first.",
-      ephemeral: true,
     });
     return;
   }
@@ -166,12 +164,11 @@ async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
     await i.reply({
       content:
         "⏳ All **50 sessions** are currently active.\nPlease wait until someone frees a slot.",
-      ephemeral: true,
     });
     return;
   }
 
-  await i.deferReply({ ephemeral: true });
+  await i.deferReply();
 
   const region    = i.options.getString("region",    true) as string;
   const partyCode = i.options.getString("party_code") ?? "Public";
@@ -231,12 +228,11 @@ async function handleStopSession(i: ChatInputCommandInteraction): Promise<void> 
   if (!session) {
     await i.reply({
       content: "⚠️ You have no active session to stop.",
-      ephemeral: true,
     });
     return;
   }
 
-  await i.deferReply({ ephemeral: true });
+  await i.deferReply();
 
   try {
     await stopBots(i.user.id);
@@ -260,7 +256,7 @@ async function handleStopSession(i: ChatInputCommandInteraction): Promise<void> 
 
 async function handleBotOn(i: ChatInputCommandInteraction): Promise<void> {
   if (i.user.id !== OWNER_ID) {
-    await i.reply({ content: "❌ Admin only.", ephemeral: true });
+    await i.reply({ content: "❌ Admin only." });
     return;
   }
   botEnabled = true;
@@ -275,7 +271,7 @@ async function handleBotOn(i: ChatInputCommandInteraction): Promise<void> {
 
 async function handleBotOff(i: ChatInputCommandInteraction): Promise<void> {
   if (i.user.id !== OWNER_ID) {
-    await i.reply({ content: "❌ Admin only.", ephemeral: true });
+    await i.reply({ content: "❌ Admin only." });
     return;
   }
   botEnabled = false;
@@ -333,7 +329,6 @@ export async function startTrackerBot(): Promise<void> {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: "❌ Something went wrong. Try again!",
-          ephemeral: true,
         });
       }
     }
