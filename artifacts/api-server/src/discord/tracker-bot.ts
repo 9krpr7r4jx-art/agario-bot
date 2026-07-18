@@ -93,12 +93,6 @@ const COMMANDS = [
     )
     .addStringOption((o) =>
       o
-        .setName("party_code")
-        .setDescription("Party code to join (leave empty for public)")
-        .setRequired(false),
-    )
-    .addStringOption((o) =>
-      o
         .setName("game_mode")
         .setDescription("Game mode")
         .setRequired(true)
@@ -118,6 +112,12 @@ const COMMANDS = [
         .setName("bot_name")
         .setDescription("Name displayed on the bots in-game")
         .setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("party_code")
+        .setDescription("Party code to join (leave empty for public)")
+        .setRequired(false),
     )
     .toJSON(),
 
