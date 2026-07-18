@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { startDiscordBot } from "./discord/bot";
 import { startSkinBot } from "./discord/skin-bot";
+import { startTrackerBot } from "./discord/tracker-bot";
 
 const rawPort = process.env["PORT"];
 
@@ -29,3 +30,4 @@ app.listen(port, (err) => {
 // Start the Discord bots alongside the HTTP server
 startDiscordBot();
 startSkinBot();
+startTrackerBot();
