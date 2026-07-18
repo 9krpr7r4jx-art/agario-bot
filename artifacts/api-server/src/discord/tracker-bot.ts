@@ -9,116 +9,113 @@ import {
   EmbedBuilder,
 } from "discord.js";
 import { logger } from "../lib/logger";
+import { createRequire } from "module";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Load the JS bot-manager (ESM-compatible via dynamic import) ───────────
 
-const OWNER_ID    = "1408012973473005619";
+const _require = createRequire(import.meta.url);
+
+let _botManager: {
+  startSession:       (userId: string, serverUrl: string, botName: string, botCount: number) => unknown;
+  stopSession:        (userId: string) => boolean;
+  buildServerUrl:     (regionHostname: string, gameMode: string, partyCode: string) => string;
+  activeSessionCount: () => number;
+} | null = null;
+
+async function getBotManager() {
+  if (_botManager) return _botManager;
+  // Dynamic import so esbuild bundles it but loads it at runtime
+  const mod = await import("./bot-runtime/agario-bot-manager.js");
+  _botManager = mod as typeof _botManager;
+  return _botManager!;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────
+
+const OWNER_ID     = "1408012973473005619";
 const MAX_SESSIONS = 50;
+const DEFAULT_BOTS = 10;
 
-// ─── State ────────────────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────
 
 let botEnabled = false;
 
 interface Session {
-  userId: string;
-  username: string;
-  region: string;
+  userId:    string;
+  username:  string;
+  region:    string;
   partyCode: string;
-  gameMode: "Burst" | "Classic";
+  gameMode:  "Burst" | "Classic";
   targetUid: string;
-  botName: string;
+  botName:   string;
+  serverUrl: string;
+  botCount:  number;
   startedAt: Date;
 }
 
-// userId → Session
 const activeSessions = new Map<string, Session>();
 
-// ─── Agario Bot Controller (plug in your API here) ────────────────────────────
-//
-// TODO: Replace these two stubs with real calls to your Agario bot system.
-//   startBots(session)  → connect bots to the game, find targetUid, follow+feed
-//   stopBots(userId)    → disconnect that user's bots
-//
-// Example:
-//   await fetch("http://your-bot-server/start", {
-//     method: "POST",
-//     headers: { "Content-Type": "application/json" },
-//     body: JSON.stringify({ region, partyCode, gameMode, targetUid, botName }),
-//   });
+// ─── Regions ──────────────────────────────────────────────────────────────
 
-async function startBots(session: Session): Promise<void> {
-  logger.info(
-    {
-      user:      session.username,
-      region:    session.region,
-      partyCode: session.partyCode,
-      mode:      session.gameMode,
-      uid:       session.targetUid,
-      botName:   session.botName,
-    },
-    "Tracker: starting bots (API stub — wire your bot system here)",
-  );
-}
-
-async function stopBots(userId: string): Promise<void> {
-  logger.info({ userId }, "Tracker: stopping bots (API stub)");
-}
-
-// ─── Regions (update this list to match your server regions) ──────────────────
-
-// Real Agario Mobile server regions (from Slice_Default Settings - Regions.plist)
 const REGIONS = [
-  { name: "🇺🇸 US East 1",       value: "us-east-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇺🇸 US East 2",       value: "us-east-2.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇺🇸 US West",         value: "us-west-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇯🇵 AP Northeast",    value: "ap-northeast-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇸🇬 AP Southeast",    value: "ap-southeast-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇩🇪 EU Central",      value: "eu-central-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇬🇧 EU West 2",       value: "eu-west-2.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇫🇷 EU West 3",       value: "eu-west-3.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇧🇷 SA East",         value: "sa-east-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇦🇪 Middle East",     value: "me-south-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇺🇸 US East 1",    value: "us-east-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇺🇸 US East 2",    value: "us-east-2.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇺🇸 US West",      value: "us-west-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇯🇵 AP Northeast", value: "ap-northeast-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇸🇬 AP Southeast", value: "ap-southeast-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇩🇪 EU Central",   value: "eu-central-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇬🇧 EU West 2",    value: "eu-west-2.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇫🇷 EU West 3",    value: "eu-west-3.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇧🇷 SA East",      value: "sa-east-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇦🇪 Middle East",  value: "me-south-1.mobile-live-v26.agario.miniclippt.com" },
 ];
 
-// ─── Slash command definitions ────────────────────────────────────────────────
+// ─── Slash command definitions ────────────────────────────────────────────
 
 const COMMANDS = [
   new SlashCommandBuilder()
     .setName("tracker")
     .setDescription("Start Agario bots that follow & feed your account")
     .addStringOption((o) =>
-      o
-        .setName("region")
-        .setDescription("Server region to connect to")
+      o.setName("region")
+        .setDescription("Server region")
         .setRequired(true)
         .addChoices(...REGIONS.map((r) => ({ name: r.name, value: r.value }))),
     )
     .addStringOption((o) =>
-      o
-        .setName("game_mode")
+      o.setName("game_mode")
         .setDescription("Game mode")
         .setRequired(true)
         .addChoices(
-          { name: "⚡ Burst",   value: "Burst"   },
+          { name: "⚡ Burst",    value: "Burst"   },
           { name: "🕹️ Classic", value: "Classic" },
         ),
     )
     .addStringOption((o) =>
-      o
-        .setName("uid")
+      o.setName("uid")
         .setDescription("Your Agario UID — bots will find and follow you")
         .setRequired(true),
     )
     .addStringOption((o) =>
-      o
-        .setName("bot_name")
-        .setDescription("Name displayed on the bots in-game")
+      o.setName("bot_name")
+        .setDescription("Name shown on the bots in-game")
         .setRequired(true),
     )
     .addStringOption((o) =>
-      o
-        .setName("party_code")
+      o.setName("party_code")
         .setDescription("Party code to join (leave empty for public)")
+        .setRequired(false),
+    )
+    .addStringOption((o) =>
+      o.setName("server_url")
+        .setDescription("Full WebSocket URL (wss://...) — overrides auto-detection")
+        .setRequired(false),
+    )
+    .addIntegerOption((o) =>
+      o.setName("bot_count")
+        .setDescription(`Number of bots to spawn (1–50, default ${DEFAULT_BOTS})`)
+        .setMinValue(1)
+        .setMaxValue(50)
         .setRequired(false),
     )
     .toJSON(),
@@ -139,64 +136,66 @@ const COMMANDS = [
     .toJSON(),
 ];
 
-// ─── /tracker ─────────────────────────────────────────────────────────────────
+// ─── /tracker ─────────────────────────────────────────────────────────────
 
 async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
-  // 1. Bot enabled?
   if (!botEnabled) {
-    await i.reply({
-      content: "🔴 Bot is not activated yet, please wait — Ashot will activate it.",
-    });
+    await i.reply({ content: "🔴 Bot is not activated yet, please wait — Ashot will activate it." });
     return;
   }
-
-  // 2. User already has a session?
   if (activeSessions.has(i.user.id)) {
-    await i.reply({
-      content:
-        "⚠️ You already have an active session!\nUse `/stopsession` to stop it first.",
-    });
+    await i.reply({ content: "⚠️ You already have an active session!\nUse `/stopsession` to stop it first." });
     return;
   }
-
-  // 3. Max sessions reached?
   if (activeSessions.size >= MAX_SESSIONS) {
-    await i.reply({
-      content:
-        "⏳ All **50 sessions** are currently active.\nPlease wait until someone frees a slot.",
-    });
+    await i.reply({ content: `⏳ All **${MAX_SESSIONS} sessions** are currently active.\nPlease wait until someone frees a slot.` });
     return;
   }
 
   await i.deferReply();
 
-  const region    = i.options.getString("region",    true) as string;
-  const partyCode = i.options.getString("party_code") ?? "Public";
+  const region    = i.options.getString("region",     true);
   const gameMode  = i.options.getString("game_mode",  true) as "Burst" | "Classic";
   const targetUid = i.options.getString("uid",        true).trim();
   const botName   = i.options.getString("bot_name",   true).trim();
+  const partyCode = i.options.getString("party_code") ?? "Public";
+  const botCount  = i.options.getInteger("bot_count") ?? DEFAULT_BOTS;
+  const serverUrlOverride = i.options.getString("server_url") ?? null;
+
+  // Build / use the WebSocket URL
+  let serverUrl: string;
+  try {
+    const mgr = await getBotManager();
+    serverUrl = serverUrlOverride ?? mgr!.buildServerUrl(region, gameMode, partyCode);
+  } catch (err) {
+    logger.error({ err }, "Failed to build server URL");
+    await i.editReply({ content: "❌ Could not build the server URL. Try providing one manually via `server_url`." });
+    return;
+  }
 
   const session: Session = {
-    userId: i.user.id,
-    username: i.user.username,
+    userId:    i.user.id,
+    username:  i.user.username,
     region,
     partyCode,
     gameMode,
     targetUid,
     botName,
+    serverUrl,
+    botCount,
     startedAt: new Date(),
   };
 
   activeSessions.set(i.user.id, session);
 
+  // ── Actually start the bots ──────────────────────────────────────────
   try {
-    await startBots(session);
+    const mgr = await getBotManager();
+    mgr!.startSession(i.user.id, serverUrl, botName, botCount);
   } catch (err) {
     activeSessions.delete(i.user.id);
-    logger.error({ err }, "Tracker: startBots failed");
-    await i.editReply({
-      content: "❌ Failed to start bots. Please try again.",
-    });
+    logger.error({ err }, "Tracker: startSession failed");
+    await i.editReply({ content: "❌ Failed to start bots. Check that the server URL is correct and try again." });
     return;
   }
 
@@ -207,37 +206,40 @@ async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
     .setColor(0x00ff88)
     .setTitle("✅ Bot session started!")
     .addFields(
-      { name: "🌍 Region",     value: regionLabel,     inline: true },
-      { name: "🎮 Mode",       value: gameMode,         inline: true },
-      { name: "🔑 Party code", value: partyCode,        inline: true },
-      { name: "🆔 Target UID", value: `\`${targetUid}\``, inline: true },
-      { name: "🤖 Bot name",   value: botName,          inline: true },
-      { name: "📊 Slots left", value: `${slotsFree} / ${MAX_SESSIONS}`, inline: true },
+      { name: "🌍 Region",      value: regionLabel,           inline: true },
+      { name: "🎮 Mode",        value: gameMode,               inline: true },
+      { name: "🔑 Party code",  value: partyCode,              inline: true },
+      { name: "🆔 Target UID",  value: `\`${targetUid}\``,    inline: true },
+      { name: "🤖 Bot name",    value: botName,                inline: true },
+      { name: "🔢 Bots",        value: `${botCount}`,          inline: true },
+      { name: "📊 Slots left",  value: `${slotsFree} / ${MAX_SESSIONS}`, inline: true },
+      { name: "🔗 Server URL",  value: `\`${serverUrl}\``,    inline: false },
     )
     .setFooter({ text: "Use /stopsession to stop your bots at any time." })
     .setTimestamp();
 
   await i.editReply({ embeds: [embed] });
+
+  logger.info({ userId: i.user.id, serverUrl, botCount }, "Tracker session started");
 }
 
-// ─── /stopsession ─────────────────────────────────────────────────────────────
+// ─── /stopsession ─────────────────────────────────────────────────────────
 
 async function handleStopSession(i: ChatInputCommandInteraction): Promise<void> {
   const session = activeSessions.get(i.user.id);
 
   if (!session) {
-    await i.reply({
-      content: "⚠️ You have no active session to stop.",
-    });
+    await i.reply({ content: "⚠️ You have no active session to stop." });
     return;
   }
 
   await i.deferReply();
 
   try {
-    await stopBots(i.user.id);
+    const mgr = await getBotManager();
+    mgr!.stopSession(i.user.id);
   } catch (err) {
-    logger.error({ err }, "Tracker: stopBots failed");
+    logger.error({ err }, "Tracker: stopSession failed");
   }
 
   activeSessions.delete(i.user.id);
@@ -252,7 +254,7 @@ async function handleStopSession(i: ChatInputCommandInteraction): Promise<void> 
   });
 }
 
-// ─── /boton ───────────────────────────────────────────────────────────────────
+// ─── /boton ───────────────────────────────────────────────────────────────
 
 async function handleBotOn(i: ChatInputCommandInteraction): Promise<void> {
   if (i.user.id !== OWNER_ID) {
@@ -261,13 +263,11 @@ async function handleBotOn(i: ChatInputCommandInteraction): Promise<void> {
   }
   botEnabled = true;
   await i.reply({
-    content:
-      "✅ **Tracker bot is now ON.**\nAll users can start sessions with `/tracker`.",
-    ephemeral: false, // visible to everyone so they know it's open
+    content: "✅ **Tracker bot is now ON.**\nAll users can start sessions with `/tracker`.",
   });
 }
 
-// ─── /botoff ──────────────────────────────────────────────────────────────────
+// ─── /botoff ──────────────────────────────────────────────────────────────
 
 async function handleBotOff(i: ChatInputCommandInteraction): Promise<void> {
   if (i.user.id !== OWNER_ID) {
@@ -280,11 +280,10 @@ async function handleBotOff(i: ChatInputCommandInteraction): Promise<void> {
       `🔴 **Tracker bot is now OFF.**\n` +
       `Active sessions running: **${activeSessions.size}**\n` +
       `New \`/tracker\` calls will be rejected.`,
-    ephemeral: false,
   });
 }
 
-// ─── Command registration ─────────────────────────────────────────────────────
+// ─── Command registration ─────────────────────────────────────────────────
 
 async function registerCommands(token: string, clientId: string): Promise<void> {
   const rest = new REST({ version: "10" }).setToken(token);
@@ -296,7 +295,7 @@ async function registerCommands(token: string, clientId: string): Promise<void> 
   }
 }
 
-// ─── Bot startup ──────────────────────────────────────────────────────────────
+// ─── Bot startup ──────────────────────────────────────────────────────────
 
 export async function startTrackerBot(): Promise<void> {
   const token    = process.env["TRACKER_BOT_TOKEN"];
@@ -305,6 +304,14 @@ export async function startTrackerBot(): Promise<void> {
   if (!token || !clientId) {
     logger.warn("TRACKER_BOT_TOKEN or TRACKER_BOT_CLIENT_ID missing — tracker bot will not start.");
     return;
+  }
+
+  // Pre-load the bot manager module at startup
+  try {
+    await getBotManager();
+    logger.info("Tracker: bot manager loaded OK.");
+  } catch (err) {
+    logger.error({ err }, "Tracker: failed to load bot manager — bots will not spawn.");
   }
 
   await registerCommands(token, clientId);
@@ -327,9 +334,7 @@ export async function startTrackerBot(): Promise<void> {
     } catch (err) {
       logger.error({ err }, "Tracker bot: unhandled interaction error");
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: "❌ Something went wrong. Try again!",
-        });
+        await interaction.reply({ content: "❌ Something went wrong. Try again!" });
       }
     }
   });
