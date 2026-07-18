@@ -66,16 +66,18 @@ async function stopBots(userId: string): Promise<void> {
 
 // ─── Regions (update this list to match your server regions) ──────────────────
 
+// Real Agario Mobile server regions (from Slice_Default Settings - Regions.plist)
 const REGIONS = [
-  { name: "🇺🇸 North America",   value: "NA" },
-  { name: "🇪🇺 Europe",           value: "EU" },
-  { name: "🇧🇷 South America",    value: "SA" },
-  { name: "🇯🇵 East Asia",        value: "EA" },
-  { name: "🇸🇬 Southeast Asia",   value: "SEA" },
-  { name: "🇦🇺 Australia",        value: "AU" },
-  { name: "🇷🇺 Russia",           value: "RU" },
-  { name: "🇮🇳 India",            value: "IN" },
-  { name: "🇹🇷 Turkey",           value: "TR" },
+  { name: "🇺🇸 US East 1",       value: "us-east-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇺🇸 US East 2",       value: "us-east-2.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇺🇸 US West",         value: "us-west-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇯🇵 AP Northeast",    value: "ap-northeast-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇸🇬 AP Southeast",    value: "ap-southeast-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇩🇪 EU Central",      value: "eu-central-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇬🇧 EU West 2",       value: "eu-west-2.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇫🇷 EU West 3",       value: "eu-west-3.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇧🇷 SA East",         value: "sa-east-1.mobile-live-v26.agario.miniclippt.com" },
+  { name: "🇦🇪 Middle East",     value: "me-south-1.mobile-live-v26.agario.miniclippt.com" },
 ];
 
 // ─── Slash command definitions ────────────────────────────────────────────────
