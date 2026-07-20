@@ -10,19 +10,17 @@ import {
 } from "discord.js";
 import { logger } from "../lib/logger";
 
-// ─── Load mobile bot manager (ES module JS) ───────────────────────────────
+// ─── Load web bot manager (ES module JS) ─────────────────────────────────
 
 let _mgr: {
-  startSession:       (userId: string, host: string, port: number, botName: string, botCount: number, uid: string | null, partyCode?: string | null) => unknown;
+  startSession:       (userId: string, serverUrl: string, botName: string, botCount: number, ownerName?: string | null) => Promise<unknown>;
   stopSession:        (userId: string) => boolean;
-  buildMobileHost:    (regionHostname: string) => string;
-  uidToAccountId:     (uid: string) => number | null;
   activeSessionCount: () => number;
 } | null = null;
 
 async function getMgr() {
   if (_mgr) return _mgr;
-  const mod = await import("./bot-runtime/mobile-bot-manager.js");
+  const mod = await import("./bot-runtime/web-bot-manager.js");
   _mgr = mod as typeof _mgr;
   return _mgr!;
 }
@@ -32,7 +30,6 @@ async function getMgr() {
 const OWNER_ID     = "1408012973473005619";
 const MAX_SESSIONS = 50;
 const DEFAULT_BOTS = 10;
-const MOBILE_PORT  = 9000;
 
 // ─── State ────────────────────────────────────────────────────────────────
 
@@ -41,57 +38,24 @@ let botEnabled = false;
 interface Session {
   userId:    string;
   username:  string;
-  host:      string;
-  port:      number;
-  partyCode: string;
-  gameMode:  string;
-  targetUid: string;
+  serverUrl: string;
   botName:   string;
   botCount:  number;
+  ownerName: string;
   startedAt: Date;
 }
 
 const activeSessions = new Map<string, Session>();
-
-// ─── Regions ──────────────────────────────────────────────────────────────
-
-const REGIONS = [
-  { name: "🇺🇸 US East 1",    value: "us-east-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇺🇸 US East 2",    value: "us-east-2.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇺🇸 US West",      value: "us-west-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇯🇵 AP Northeast", value: "ap-northeast-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇸🇬 AP Southeast", value: "ap-southeast-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇩🇪 EU Central",   value: "eu-central-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇬🇧 EU West 2",    value: "eu-west-2.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇫🇷 EU West 3",    value: "eu-west-3.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇧🇷 SA East",      value: "sa-east-1.mobile-live-v26.agario.miniclippt.com" },
-  { name: "🇦🇪 Middle East",  value: "me-south-1.mobile-live-v26.agario.miniclippt.com" },
-];
 
 // ─── Slash commands ───────────────────────────────────────────────────────
 
 const COMMANDS = [
   new SlashCommandBuilder()
     .setName("tracker")
-    .setDescription("Start Agario Mobile bots that follow & feed your account (TCP port 9000)")
+    .setDescription("Start Agario bots that join your party and follow you in-game")
     .addStringOption((o) =>
-      o.setName("region")
-        .setDescription("Mobile server region")
-        .setRequired(true)
-        .addChoices(...REGIONS.map((r) => ({ name: r.name, value: r.value }))),
-    )
-    .addStringOption((o) =>
-      o.setName("game_mode")
-        .setDescription("Game mode")
-        .setRequired(true)
-        .addChoices(
-          { name: "⚡ Burst",    value: "Burst"   },
-          { name: "🕹️ Classic", value: "Classic" },
-        ),
-    )
-    .addStringOption((o) =>
-      o.setName("uid")
-        .setDescription("Your Agario UID — bots will find and follow you in-game")
+      o.setName("server_url")
+        .setDescription('Party server URL — paste the "server" field from your party JSON (wss://...)')
         .setRequired(true),
     )
     .addStringOption((o) =>
@@ -100,9 +64,9 @@ const COMMANDS = [
         .setRequired(true),
     )
     .addStringOption((o) =>
-      o.setName("party_code")
-        .setDescription("Party code (if you want bots in your private room)")
-        .setRequired(false),
+      o.setName("owner_name")
+        .setDescription("Your in-game name — bots will follow and feed you")
+        .setRequired(true),
     )
     .addIntegerOption((o) =>
       o.setName("bot_count")
@@ -133,74 +97,68 @@ const COMMANDS = [
 
 async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
   if (!botEnabled) {
-    await i.reply({ content: "🔴 Bot not activated yet — attendez qu'Ashot l'active avec `/boton`." });
+    await i.reply({ content: "🔴 Bot not activated yet — wait for the admin to run `/boton`." });
     return;
   }
   if (activeSessions.has(i.user.id)) {
-    await i.reply({ content: "⚠️ Tu as déjà une session active.\nUtilise `/stopsession` pour l'arrêter." });
+    await i.reply({ content: "⚠️ You already have an active session.\nUse `/stopsession` to stop it first." });
     return;
   }
   if (activeSessions.size >= MAX_SESSIONS) {
-    await i.reply({ content: `⏳ Toutes les **${MAX_SESSIONS} sessions** sont utilisées. Réessaie plus tard.` });
+    await i.reply({ content: `⏳ All **${MAX_SESSIONS} slots** are in use. Try again later.` });
+    return;
+  }
+
+  const serverUrl  = i.options.getString("server_url",  true).trim();
+  const botName    = i.options.getString("bot_name",    true).trim();
+  const ownerName  = i.options.getString("owner_name",  true).trim();
+  const botCount   = i.options.getInteger("bot_count") ?? DEFAULT_BOTS;
+
+  // Basic WSS URL validation
+  if (!serverUrl.startsWith("wss://") && !serverUrl.startsWith("ws://")) {
+    await i.reply({ content: "❌ Invalid server URL — it must start with `wss://`.\nPaste the `server` field from your party JSON." });
     return;
   }
 
   await i.deferReply();
 
-  const regionHostname = i.options.getString("region",    true);
-  const gameMode       = i.options.getString("game_mode", true);
-  const targetUid      = i.options.getString("uid",       true).trim();
-  const botName        = i.options.getString("bot_name",  true).trim();
-  const partyCode      = i.options.getString("party_code") ?? "Public";
-  const botCount       = i.options.getInteger("bot_count") ?? DEFAULT_BOTS;
-
-  const mgr  = await getMgr();
-  const host = mgr.buildMobileHost(regionHostname);
-
   const session: Session = {
     userId:    i.user.id,
     username:  i.user.username,
-    host,
-    port:      MOBILE_PORT,
-    partyCode,
-    gameMode,
-    targetUid,
+    serverUrl,
     botName,
+    ownerName,
     botCount,
     startedAt: new Date(),
   };
 
-  // Start TCP bots
   try {
-    mgr.startSession(i.user.id, host, MOBILE_PORT, botName, botCount, targetUid, partyCode === "Public" ? null : partyCode);
+    const mgr = await getMgr();
+    await mgr.startSession(i.user.id, serverUrl, botName, botCount, ownerName);
     activeSessions.set(i.user.id, session);
   } catch (err) {
     logger.error({ err }, "Tracker: startSession failed");
-    await i.editReply({ content: "❌ Impossible de démarrer les bots. Vérifie la région et réessaie." });
+    await i.editReply({ content: "❌ Failed to start bots. Check the server URL and try again." });
     return;
   }
 
-  const regionLabel = REGIONS.find((r) => r.value === regionHostname)?.name ?? regionHostname;
-  const slotsFree   = MAX_SESSIONS - activeSessions.size;
+  const slotsFree = MAX_SESSIONS - activeSessions.size;
 
   const embed = new EmbedBuilder()
     .setColor(0x00ff88)
-    .setTitle("✅ Session de bots démarrée !")
+    .setTitle("✅ Bot session started!")
     .addFields(
-      { name: "🌍 Région",       value: regionLabel,                        inline: true },
-      { name: "🎮 Mode",         value: gameMode,                            inline: true },
-      { name: "🔑 Code partie",  value: partyCode,                          inline: true },
-      { name: "🆔 UID cible",    value: `\`${targetUid}\``,                 inline: false },
-      { name: "🤖 Nom des bots", value: botName,                            inline: true },
-      { name: "🔢 Nombre",       value: `${botCount}`,                      inline: true },
-      { name: "📡 Serveur",      value: `\`${host}:${MOBILE_PORT}\``,       inline: false },
-      { name: "📊 Slots libres", value: `${slotsFree} / ${MAX_SESSIONS}`,   inline: true },
+      { name: "🌐 Server",      value: `\`${serverUrl}\``,              inline: false },
+      { name: "🤖 Bot name",    value: botName,                         inline: true  },
+      { name: "👤 Following",   value: ownerName,                       inline: true  },
+      { name: "🔢 Bot count",   value: `${botCount}`,                   inline: true  },
+      { name: "📊 Slots free",  value: `${slotsFree} / ${MAX_SESSIONS}`, inline: true },
     )
-    .setFooter({ text: "Utilise /stopsession pour arrêter tes bots." })
+    .setFooter({ text: "Use /stopsession to stop your bots." })
     .setTimestamp();
 
   await i.editReply({ embeds: [embed] });
-  logger.info({ userId: i.user.id, host, botCount }, "Mobile tracker session started");
+  logger.info({ userId: i.user.id, serverUrl, botCount }, "Web tracker session started");
 }
 
 // ─── /stopsession ─────────────────────────────────────────────────────────
@@ -208,7 +166,7 @@ async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
 async function handleStopSession(i: ChatInputCommandInteraction): Promise<void> {
   const session = activeSessions.get(i.user.id);
   if (!session) {
-    await i.reply({ content: "⚠️ Tu n'as pas de session active à arrêter." });
+    await i.reply({ content: "⚠️ You don't have an active session to stop." });
     return;
   }
 
@@ -226,9 +184,9 @@ async function handleStopSession(i: ChatInputCommandInteraction): Promise<void> 
 
   await i.editReply({
     content:
-      `🛑 **Session arrêtée.**\n` +
-      `Tes bots ont quitté **${session.host}**.\n` +
-      `📊 Slots disponibles : **${slotsFree} / ${MAX_SESSIONS}**`,
+      `🛑 **Session stopped.**\n` +
+      `Your bots have left **${session.serverUrl}**.\n` +
+      `📊 Slots available: **${slotsFree} / ${MAX_SESSIONS}**`,
   });
 }
 
@@ -236,25 +194,25 @@ async function handleStopSession(i: ChatInputCommandInteraction): Promise<void> 
 
 async function handleBotOn(i: ChatInputCommandInteraction): Promise<void> {
   if (i.user.id !== OWNER_ID) {
-    await i.reply({ content: "❌ Réservé à l'admin." });
+    await i.reply({ content: "❌ Admin only." });
     return;
   }
   botEnabled = true;
-  await i.reply({ content: "✅ **Tracker bot activé.** Les utilisateurs peuvent utiliser `/tracker`." });
+  await i.reply({ content: "✅ **Tracker bot enabled.** Users can now use `/tracker`." });
 }
 
 // ─── /botoff ──────────────────────────────────────────────────────────────
 
 async function handleBotOff(i: ChatInputCommandInteraction): Promise<void> {
   if (i.user.id !== OWNER_ID) {
-    await i.reply({ content: "❌ Réservé à l'admin." });
+    await i.reply({ content: "❌ Admin only." });
     return;
   }
   botEnabled = false;
   await i.reply({
     content:
-      `🔴 **Tracker bot désactivé.**\n` +
-      `Sessions actives en cours : **${activeSessions.size}**`,
+      `🔴 **Tracker bot disabled.**\n` +
+      `Active sessions still running: **${activeSessions.size}**`,
   });
 }
 
@@ -281,12 +239,12 @@ export async function startTrackerBot(): Promise<void> {
     return;
   }
 
-  // Pre-load mobile bot manager
+  // Pre-load web bot manager
   try {
     await getMgr();
-    logger.info("Tracker: mobile bot manager loaded.");
+    logger.info("Tracker: web bot manager loaded.");
   } catch (err) {
-    logger.error({ err }, "Tracker: failed to load mobile bot manager");
+    logger.error({ err }, "Tracker: failed to load web bot manager");
   }
 
   await registerCommands(token, clientId);
@@ -309,7 +267,7 @@ export async function startTrackerBot(): Promise<void> {
     } catch (err) {
       logger.error({ err }, "Tracker bot: unhandled error");
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "❌ Erreur inattendue. Réessaie !" });
+        await interaction.reply({ content: "❌ Unexpected error. Please try again!" });
       }
     }
   });
