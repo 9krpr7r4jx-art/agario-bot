@@ -12,7 +12,7 @@ const MOBILE_PORT      = 9000;
 // The "client" object shared by all MobileBotUnit instances in a session.
 
 class MobileRuntimeManager {
-    constructor({ host, port, botName, botCount, ownerAccountId }) {
+    constructor({ host, port, botName, botCount, ownerAccountId, partyCode }) {
         // Connection
         this.host            = host;
         this.port            = port;
@@ -22,6 +22,8 @@ class MobileRuntimeManager {
         // Identity
         this.botName         = botName;
         this.botCount        = botCount;
+        // Party code to join after spawn (null = public game)
+        this.partyCode       = partyCode ?? null;
 
         // Owner tracking — set when a bot spots the owner's cell
         this.ownerX          = NaN;
@@ -112,15 +114,16 @@ const sessions = new Map();
  * @param {string} botName      name shown in-game
  * @param {number} botCount     number of bots
  * @param {string|null} uid     owner's UID string
+ * @param {string|null} partyCode  party room code (null = join public game)
  */
-export function startSession(userId, host, port, botName, botCount, uid) {
+export function startSession(userId, host, port, botName, botCount, uid, partyCode = null) {
     stopSession(userId);
 
     const ownerAccountId = uidToAccountId(uid);
-    const manager = new MobileRuntimeManager({ host, port, botName, botCount, ownerAccountId });
+    const manager = new MobileRuntimeManager({ host, port, botName, botCount, ownerAccountId, partyCode });
     manager.spawnBots();
     sessions.set(userId, manager);
-    logger.info(`Session started for ${userId} → ${host}:${port} (${botCount} bots)`);
+    logger.info(`Session started for ${userId} → ${host}:${port} (${botCount} bots${partyCode ? `, party="${partyCode}"` : ""})`);
     return manager;
 }
 

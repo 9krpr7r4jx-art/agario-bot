@@ -13,7 +13,7 @@ import { logger } from "../lib/logger";
 // ─── Load mobile bot manager (ES module JS) ───────────────────────────────
 
 let _mgr: {
-  startSession:       (userId: string, host: string, port: number, botName: string, botCount: number, uid: string | null) => unknown;
+  startSession:       (userId: string, host: string, port: number, botName: string, botCount: number, uid: string | null, partyCode?: string | null) => unknown;
   stopSession:        (userId: string) => boolean;
   buildMobileHost:    (regionHostname: string) => string;
   uidToAccountId:     (uid: string) => number | null;
@@ -172,7 +172,7 @@ async function handleTracker(i: ChatInputCommandInteraction): Promise<void> {
 
   // Start TCP bots
   try {
-    mgr.startSession(i.user.id, host, MOBILE_PORT, botName, botCount, targetUid);
+    mgr.startSession(i.user.id, host, MOBILE_PORT, botName, botCount, targetUid, partyCode === "Public" ? null : partyCode);
     activeSessions.set(i.user.id, session);
   } catch (err) {
     logger.error({ err }, "Tracker: startSession failed");

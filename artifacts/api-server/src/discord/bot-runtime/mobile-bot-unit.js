@@ -142,6 +142,11 @@ export class MobileBotUnit {
             case 0xf2: {
                 logger.info("Bot 0xF2 → sending spawn…");
                 this.sendPacket(buffers.spawn(this.assignedName), true);
+                // If a party code is set, send userparty right after spawn
+                if (this.client.partyCode) {
+                    logger.info(`Bot sending userparty → "${this.client.partyCode}"`);
+                    this.sendPacket(buffers.userParty(this.client.partyCode), true);
+                }
                 this.spawnedAt = Date.now();
                 this.isAlive   = true;
                 this.startMoving();
